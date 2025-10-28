@@ -5,11 +5,11 @@ Scan pull requests for LLM security vulnerabilities using AI-powered analysis.
 ## Usage
 
 ```yaml
-name: Security Scan
+name: Promptfoo Code Scan
 
 on:
   pull_request:
-    types: [opened, synchronize]
+    types: [opened]
 
 permissions:
   id-token: write
