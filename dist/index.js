@@ -52405,16 +52405,23 @@ async function run() {
         ];
         core.info(`🚀 Running code-scan CLI...`);
         // Use bundled CLI (shipped with the action)
-        const actionPath = process.env.GITHUB_ACTION_PATH || '.';
-        const bundledCliPath = `${actionPath}/cli-bundle/index.js`;
-        if (!fs.existsSync(bundledCliPath)) {
+        // __dirname in bundled code points to a virtual path, but we can use path resolution
+        // The action structure is: action-root/dist/index.js and action-root/cli-bundle/index.js
+        const path = __nccwpck_require__(6928);
+        // In GitHub Actions, the action is checked out to a path like:
+        // /home/runner/work/_actions/promptfoo/code-scan-action/v0/
+        // The dist/index.js is at that root, so we need to go up from __dirname
+        const actionPath = path.resolve(__dirname, '..');
+        const bundledCliPath = __nccwpck_require__.ab + "index1.js";
+        core.info(`Looking for bundled CLI at: ${bundledCliPath}`);
+        if (!fs.existsSync(__nccwpck_require__.ab + "index1.js")) {
             throw new Error(`Bundled CLI not found at ${bundledCliPath}. This is a bug in the action packaging.`);
         }
         core.info('📦 Using bundled CLI');
         // Run code-scan CLI and capture output
         let scanOutput = '';
         let scanError = '';
-        const exitCode = await exec.exec('node', [bundledCliPath, ...cliArgs], {
+        const exitCode = await exec.exec('node', [__nccwpck_require__.ab + "index1.js", ...cliArgs], {
             listeners: {
                 stdout: (data) => {
                     scanOutput += data.toString();
