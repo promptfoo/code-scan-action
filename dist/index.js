@@ -52404,41 +52404,27 @@ async function run() {
             '--github-pr', `${context.owner}/${context.repo}#${context.pullNumber}`, // Pass PR context for server-side comment posting
         ];
         core.info(`🚀 Running code-scan CLI...`);
-        // Check if bundled CLI is available, otherwise use npx
-        const bundledCliPath = 'cli-bundle/index.js';
-        const useBundledCli = fs.existsSync(bundledCliPath);
+        // Use bundled CLI (shipped with the action)
+        const actionPath = process.env.GITHUB_ACTION_PATH || '.';
+        const bundledCliPath = `${actionPath}/cli-bundle/index.js`;
+        if (!fs.existsSync(bundledCliPath)) {
+            throw new Error(`Bundled CLI not found at ${bundledCliPath}. This is a bug in the action packaging.`);
+        }
+        core.info('📦 Using bundled CLI');
         // Run code-scan CLI and capture output
         let scanOutput = '';
         let scanError = '';
-        let exitCode;
-        if (useBundledCli) {
-            core.info('📦 Using bundled CLI');
-            exitCode = await exec.exec('node', [bundledCliPath, ...cliArgs], {
-                listeners: {
-                    stdout: (data) => {
-                        scanOutput += data.toString();
-                    },
-                    stderr: (data) => {
-                        scanError += data.toString();
-                    },
+        const exitCode = await exec.exec('node', [bundledCliPath, ...cliArgs], {
+            listeners: {
+                stdout: (data) => {
+                    scanOutput += data.toString();
                 },
-                ignoreReturnCode: true,
-            });
-        }
-        else {
-            core.info('📥 Using published CLI from npm');
-            exitCode = await exec.exec('npx', ['@promptfoo/code-scan-cli', ...cliArgs], {
-                listeners: {
-                    stdout: (data) => {
-                        scanOutput += data.toString();
-                    },
-                    stderr: (data) => {
-                        scanError += data.toString();
-                    },
+                stderr: (data) => {
+                    scanError += data.toString();
                 },
-                ignoreReturnCode: true,
-            });
-        }
+            },
+            ignoreReturnCode: true,
+        });
         if (exitCode !== 0) {
             core.error(`CLI exited with code ${exitCode}`);
             core.error(`Error output: ${scanError}`);
