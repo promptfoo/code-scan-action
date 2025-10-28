@@ -263,16 +263,22 @@ export declare const ScanRequestSchema: z.ZodObject<{
 }>;
 export declare const CommentSchema: z.ZodObject<{
     file: z.ZodNullable<z.ZodString>;
+    startLine: z.ZodOptional<z.ZodNullable<z.ZodNumber>>;
     line: z.ZodNullable<z.ZodNumber>;
-    body: z.ZodString;
+    finding: z.ZodString;
+    fix: z.ZodOptional<z.ZodNullable<z.ZodString>>;
 }, "strip", z.ZodTypeAny, {
     file: string | null;
     line: number | null;
-    body: string;
+    finding: string;
+    startLine?: number | null | undefined;
+    fix?: string | null | undefined;
 }, {
     file: string | null;
     line: number | null;
-    body: string;
+    finding: string;
+    startLine?: number | null | undefined;
+    fix?: string | null | undefined;
 }>;
 export declare const PhaseResultsSchema: z.ZodObject<{
     inventory: z.ZodString;
@@ -322,16 +328,22 @@ export declare const ScanResponseSchema: z.ZodObject<{
     }>;
     comments: z.ZodArray<z.ZodObject<{
         file: z.ZodNullable<z.ZodString>;
+        startLine: z.ZodOptional<z.ZodNullable<z.ZodNumber>>;
         line: z.ZodNullable<z.ZodNumber>;
-        body: z.ZodString;
+        finding: z.ZodString;
+        fix: z.ZodOptional<z.ZodNullable<z.ZodString>>;
     }, "strip", z.ZodTypeAny, {
         file: string | null;
         line: number | null;
-        body: string;
+        finding: string;
+        startLine?: number | null | undefined;
+        fix?: string | null | undefined;
     }, {
         file: string | null;
         line: number | null;
-        body: string;
+        finding: string;
+        startLine?: number | null | undefined;
+        fix?: string | null | undefined;
     }>, "many">;
     commentsPosted: z.ZodOptional<z.ZodBoolean>;
     batchCount: z.ZodOptional<z.ZodNumber>;
@@ -340,7 +352,9 @@ export declare const ScanResponseSchema: z.ZodObject<{
     comments: {
         file: string | null;
         line: number | null;
-        body: string;
+        finding: string;
+        startLine?: number | null | undefined;
+        fix?: string | null | undefined;
     }[];
     success: boolean;
     phases: {
@@ -358,7 +372,9 @@ export declare const ScanResponseSchema: z.ZodObject<{
     comments: {
         file: string | null;
         line: number | null;
-        body: string;
+        finding: string;
+        startLine?: number | null | undefined;
+        fix?: string | null | undefined;
     }[];
     success: boolean;
     phases: {

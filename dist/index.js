@@ -52238,8 +52238,8 @@ async function postReviewComments(token, context, comments) {
     }
     const octokit = new rest_1.Octokit({ auth: token });
     // Separate line-specific comments from general PR comments
-    const lineComments = comments.filter(c => c.file && c.body);
-    const generalComments = comments.filter(c => !c.file && c.body);
+    const lineComments = comments.filter(c => c.file && c.finding);
+    const generalComments = comments.filter(c => !c.file && c.finding);
     // Post line-specific review comments
     if (lineComments.length > 0) {
         core.info(`Posting ${lineComments.length} line-specific review comments...`);
@@ -52249,11 +52249,21 @@ async function postReviewComments(token, context, comments) {
                 repo: context.repo,
                 pull_number: context.pullNumber,
                 event: 'COMMENT',
-                comments: lineComments.map(c => ({
-                    path: c.file,
-                    line: c.line || undefined,
-                    body: c.body,
-                })),
+                comments: lineComments.map(c => {
+                    // Combine finding and fix into comment body
+                    let body = c.finding;
+                    if (c.fix) {
+                        body += `\n\n<details>\n<summary>Suggested Fix</summary>\n\n${c.fix}\n</details>`;
+                    }
+                    return {
+                        path: c.file,
+                        line: c.line || undefined,
+                        start_line: c.startLine || undefined,
+                        side: 'RIGHT',
+                        start_side: c.startLine ? 'RIGHT' : undefined,
+                        body,
+                    };
+                }),
             });
             core.info(`✅ Posted ${lineComments.length} line comments successfully`);
         }
@@ -52262,8 +52272,16 @@ async function postReviewComments(token, context, comments) {
             core.info('Posting as summary comment instead...');
             const summaryBody = lineComments
                 .map(c => {
-                const location = c.line ? `${c.file}:${c.line}` : c.file;
-                return `**${location}**\n\n${c.body}`;
+                const lineRange = c.startLine && c.line && c.startLine !== c.line
+                    ? `${c.file}:${c.startLine}-${c.line}`
+                    : c.line
+                        ? `${c.file}:${c.line}`
+                        : c.file;
+                let commentText = c.finding;
+                if (c.fix) {
+                    commentText += `\n\n<details>\n<summary>Suggested Fix</summary>\n\n${c.fix}\n</details>`;
+                }
+                return `**${lineRange}**\n\n${commentText}`;
             })
                 .join('\n\n---\n\n');
             await octokit.issues.createComment({
@@ -52280,11 +52298,16 @@ async function postReviewComments(token, context, comments) {
         core.info(`Posting ${generalComments.length} general PR comment(s)...`);
         for (const comment of generalComments) {
             try {
+                // Combine finding and fix for general comments too
+                let body = comment.finding;
+                if (comment.fix) {
+                    body += `\n\n<details>\n<summary>Suggested Fix</summary>\n\n${comment.fix}\n</details>`;
+                }
                 await octokit.issues.createComment({
                     owner: context.owner,
                     repo: context.repo,
                     issue_number: context.pullNumber,
-                    body: comment.body,
+                    body,
                 });
             }
             catch (error) {
@@ -52453,8 +52476,8 @@ async function run() {
             try {
                 const octokit = github.getOctokit(githubToken);
                 // Separate line-specific comments from general PR comments
-                const lineComments = comments.filter((c) => c.file && c.body);
-                const generalComments = comments.filter((c) => !c.file && c.body);
+                const lineComments = comments.filter((c) => c.file && c.finding);
+                const generalComments = comments.filter((c) => !c.file && c.finding);
                 // Post line-specific review comments
                 if (lineComments.length > 0) {
                     core.info(`📌 Posting ${lineComments.length} line-specific comments...`);
@@ -52463,11 +52486,21 @@ async function run() {
                         repo: context.repo,
                         pull_number: context.pullNumber,
                         event: 'COMMENT',
-                        comments: lineComments.map((c) => ({
-                            path: c.file,
-                            line: c.line || undefined,
-                            body: c.body,
-                        })),
+                        comments: lineComments.map((c) => {
+                            // Combine finding and fix into comment body
+                            let body = c.finding;
+                            if (c.fix) {
+                                body += `\n\n<details>\n<summary>Suggested Fix</summary>\n\n${c.fix}\n</details>`;
+                            }
+                            return {
+                                path: c.file,
+                                line: c.line || undefined,
+                                start_line: c.startLine || undefined,
+                                side: 'RIGHT',
+                                start_side: c.startLine ? 'RIGHT' : undefined,
+                                body,
+                            };
+                        }),
                     });
                     core.info('✅ Line comments posted successfully');
                 }
@@ -52475,11 +52508,16 @@ async function run() {
                 if (generalComments.length > 0) {
                     core.info(`💬 Posting ${generalComments.length} general comments...`);
                     for (const comment of generalComments) {
+                        // Combine finding and fix for general comments
+                        let body = comment.finding;
+                        if (comment.fix) {
+                            body += `\n\n<details>\n<summary>Suggested Fix</summary>\n\n${comment.fix}\n</details>`;
+                        }
                         await octokit.rest.issues.createComment({
                             owner: context.owner,
                             repo: context.repo,
                             issue_number: context.pullNumber,
-                            body: comment.body,
+                            body,
                         });
                     }
                     core.info('✅ General comments posted successfully');
@@ -52505,7 +52543,10 @@ async function run() {
             core.info('🧪 Running in act - showing comment preview:');
             comments.forEach((comment, index) => {
                 core.info(`  ${index + 1}. ${comment.file}:${comment.line}`);
-                core.info(`     ${comment.body.substring(0, 100)}...`);
+                const preview = comment.fix
+                    ? `${comment.finding.substring(0, 80)}... [+ suggested fix]`
+                    : comment.finding.substring(0, 100);
+                core.info(`     ${preview}${comment.finding.length > 100 ? '...' : ''}`);
             });
         }
         // Handle failure mode

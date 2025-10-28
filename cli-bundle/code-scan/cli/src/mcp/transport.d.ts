@@ -15,20 +15,14 @@ export declare class SocketIoMcpBridgeError extends Error {
  */
 export declare class SocketIoMcpBridge {
     private mcpProcess;
-    private serverUrl;
+    socket: Socket;
     private sessionId;
-    private auth?;
-    socket: Socket | null;
     private readBuffer;
-    private isConnected;
     private wireIdSeq;
     private wireIdMap;
-    constructor(mcpProcess: ChildProcess, serverUrl: string, sessionId: string, auth?: {
-        apiKey?: string;
-        oidcToken?: string;
-    } | undefined);
+    constructor(mcpProcess: ChildProcess, socket: Socket, sessionId: string);
     /**
-     * Connect to server and start bridging
+     * Start bridging MCP stdio with the provided socket
      */
     connect(): Promise<void>;
     /**
@@ -36,7 +30,7 @@ export declare class SocketIoMcpBridge {
      */
     private startBridging;
     /**
-     * Disconnect socket and stop bridging
+     * Stop bridging (socket lifecycle managed externally)
      */
     disconnect(): Promise<void>;
     /**
