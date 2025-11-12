@@ -52298,6 +52298,7 @@ var __importStar = (this && this.__importStar) || (function () {
 })();
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.getGitHubContext = getGitHubContext;
+exports.getPRFiles = getPRFiles;
 exports.postReviewComments = postReviewComments;
 const core = __importStar(__nccwpck_require__(6618));
 const github = __importStar(__nccwpck_require__(2146));
@@ -52317,6 +52318,24 @@ function getGitHubContext() {
         number: context.payload.pull_request.number,
         sha: context.payload.pull_request.head.sha,
     };
+}
+/**
+ * Get list of files changed in the PR
+ * @param token GitHub token
+ * @param context GitHub PR context
+ * @returns Array of file changes
+ */
+async function getPRFiles(token, context) {
+    const octokit = new rest_1.Octokit({ auth: token });
+    const { data: files } = await octokit.pulls.listFiles({
+        owner: context.owner,
+        repo: context.repo,
+        pull_number: context.number,
+    });
+    return files.map((file) => ({
+        path: file.filename,
+        status: file.status,
+    }));
 }
 /**
  * Post review comments on the PR
@@ -52467,6 +52486,7 @@ const github = __importStar(__nccwpck_require__(2146));
 const fs = __importStar(__nccwpck_require__(9896));
 const config_1 = __nccwpck_require__(319);
 const github_1 = __nccwpck_require__(1454);
+const setupPr_1 = __nccwpck_require__(222);
 const codeScan_1 = __nccwpck_require__(333);
 async function run() {
     try {
@@ -52499,6 +52519,25 @@ async function run() {
         // Validate we're in a PR context
         const context = (0, github_1.getGitHubContext)();
         core.info(`📋 Scanning PR #${context.number} in ${context.owner}/${context.repo}`);
+        // Check if this is a setup PR (workflow file addition) - detect early to skip CLI installation
+        core.info('🔎 Checking if this is a setup PR...');
+        const files = await (0, github_1.getPRFiles)(githubToken, context);
+        if ((0, setupPr_1.detectSetupPR)(files)) {
+            core.info('🎉 Setup PR detected - skipping scan and posting welcome message');
+            // Get OIDC token if available for branded comment
+            let oidcToken;
+            try {
+                oidcToken = await core.getIDToken('promptfoo');
+                core.info('🔐 Got OIDC token for branded comment');
+            }
+            catch (error) {
+                core.info('ℹ️ No OIDC token - will post as GitHub Actions bot');
+            }
+            // Handle setup PR and exit
+            await (0, setupPr_1.handleSetupPR)(githubToken, apiHost, oidcToken);
+            return;
+        }
+        core.info('✅ Not a setup PR - proceeding with security scan');
         // Get OIDC token from GitHub to prove workflow identity
         try {
             const oidcToken = await core.getIDToken('promptfoo');
@@ -52577,6 +52616,20 @@ async function run() {
         }
         else {
             // Run real scan in production
+            // TODO: Remove build tools installation when switching to npm package
+            // Install build tools needed for native dependencies (better-sqlite3)
+            // when installing from git source. Not needed when installing from npm
+            // because npm packages include prebuilt binaries.
+            core.info('🔧 Installing build tools for native dependencies...');
+            try {
+                await exec.exec('sudo', ['apt-get', 'update', '-qq']);
+                await exec.exec('sudo', ['apt-get', 'install', '-y', '-qq', 'python3', 'make', 'g++']);
+                core.info('✅ Build tools installed');
+            }
+            catch (error) {
+                core.warning(`Failed to install build tools: ${error instanceof Error ? error.message : String(error)}`);
+                core.warning('Installation may fail if native dependencies need compilation');
+            }
             core.info('📦 Installing promptfoo...');
             // TODO: Switch to real promptfoo npm package (not git url)
             await exec.exec('npm', [
@@ -52735,13 +52788,139 @@ run();
 
 /***/ }),
 
+/***/ 222:
+/***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
+
+"use strict";
+
+/**
+ * Setup PR Detection and Handling
+ *
+ * Detects when a PR is adding the workflow file (setup PR)
+ * and handles posting welcome comments
+ */
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.WELCOME_MESSAGE = exports.SETUP_WORKFLOW_PATH = void 0;
+exports.detectSetupPR = detectSetupPR;
+exports.handleSetupPR = handleSetupPR;
+const core = __importStar(__nccwpck_require__(6618));
+const github = __importStar(__nccwpck_require__(2146));
+const codeScan_1 = __nccwpck_require__(333);
+// Constants
+exports.SETUP_WORKFLOW_PATH = '.github/workflows/promptfoo-code-scan.yml';
+exports.WELCOME_MESSAGE = `You're almost finished installing the Promptfoo Scanner in your repo 👍 Just merge this PR to add the scan action to your GitHub workflows. It will then automatically run on all PRs in this repo.`;
+/**
+ * Check if this is a setup PR (single file adding workflow)
+ */
+function detectSetupPR(files) {
+    return (files.length === 1 &&
+        files[0].path === exports.SETUP_WORKFLOW_PATH &&
+        files[0].status === codeScan_1.FileChangeStatus.ADDED);
+}
+/**
+ * Handle setup PR - post welcome comment
+ * If OIDC token exists, call server to post branded comment
+ * Otherwise, post comment directly via Octokit (GitHub Actions bot)
+ */
+async function handleSetupPR(githubToken, apiHost, oidcToken) {
+    const context = github.context;
+    // Ensure we're in a PR context
+    if (!context.payload.pull_request) {
+        throw new Error('Not in a pull request context');
+    }
+    const owner = context.payload.pull_request.base.repo.owner.login;
+    const repo = context.payload.pull_request.base.repo.name;
+    const prNumber = context.payload.pull_request.number;
+    core.info('🎉 Detected setup PR - posting welcome comment...');
+    // If OIDC token exists, try to post via server (branded comment)
+    if (oidcToken) {
+        core.info('🔐 OIDC token available - posting via server for branded comment...');
+        try {
+            const serverUrl = apiHost || 'https://www.promptfoo.app';
+            const response = await fetch(`${serverUrl}/api/v1/code-scan/setup-pr-comment`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'x-github-oidc-token': oidcToken,
+                },
+                body: JSON.stringify({
+                    owner,
+                    repo,
+                    prNumber,
+                }),
+            });
+            if (!response.ok) {
+                const errorText = await response.text();
+                throw new Error(`Server returned ${response.status}: ${errorText}`);
+            }
+            core.info('✅ Welcome comment posted via server (branded)');
+            return;
+        }
+        catch (error) {
+            core.warning(`Failed to post via server: ${error instanceof Error ? error.message : String(error)}`);
+            core.info('⚠️ Falling back to direct comment posting...');
+        }
+    }
+    // Fallback: Post comment directly via Octokit (GitHub Actions bot)
+    try {
+        const octokit = github.getOctokit(githubToken);
+        await octokit.rest.issues.createComment({
+            owner,
+            repo,
+            issue_number: prNumber,
+            body: exports.WELCOME_MESSAGE,
+        });
+        core.info('✅ Welcome comment posted via GitHub Actions bot');
+    }
+    catch (error) {
+        core.error(`Failed to post welcome comment: ${error instanceof Error ? error.message : String(error)}`);
+        throw error;
+    }
+}
+
+
+/***/ }),
+
 /***/ 333:
 /***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
 
 "use strict";
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.ConfigLoadError = exports.SocketIoMcpBridgeError = exports.FilesystemMcpError = exports.DiffProcessorError = exports.GitMetadataError = exports.GitError = exports.ScanResponseSchema = exports.PhaseResultsSchema = exports.CommentSchema = exports.ScanRequestSchema = exports.PullRequestContextSchema = exports.ScanConfigSchema = exports.GitMetadataSchema = exports.FileRecordSchema = exports.CodeScanSeverity = void 0;
+exports.ConfigLoadError = exports.SocketIoMcpBridgeError = exports.FilesystemMcpError = exports.DiffProcessorError = exports.GitMetadataError = exports.GitError = exports.ScanResponseSchema = exports.PhaseResultsSchema = exports.CommentSchema = exports.ScanRequestSchema = exports.PullRequestContextSchema = exports.ScanConfigSchema = exports.GitMetadataSchema = exports.FileRecordSchema = exports.FileChangeStatus = exports.CodeScanSeverity = void 0;
 exports.getSeverityEmoji = getSeverityEmoji;
 exports.getSeverityRank = getSeverityRank;
 exports.getSeverityDisplay = getSeverityDisplay;
@@ -52760,6 +52939,13 @@ var CodeScanSeverity;
     CodeScanSeverity["LOW"] = "low";
     CodeScanSeverity["NONE"] = "none";
 })(CodeScanSeverity || (exports.CodeScanSeverity = CodeScanSeverity = {}));
+var FileChangeStatus;
+(function (FileChangeStatus) {
+    FileChangeStatus["ADDED"] = "added";
+    FileChangeStatus["MODIFIED"] = "modified";
+    FileChangeStatus["REMOVED"] = "removed";
+    FileChangeStatus["RENAMED"] = "renamed";
+})(FileChangeStatus || (exports.FileChangeStatus = FileChangeStatus = {}));
 // ============================================================================
 // Severity Utility Functions
 // ============================================================================
