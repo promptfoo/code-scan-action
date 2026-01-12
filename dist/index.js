@@ -75383,10 +75383,10 @@ var __importStar = (this && this.__importStar) || (function () {
 })();
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.generateConfigFile = generateConfigFile;
+const crypto_1 = __nccwpck_require__(6982);
 const fs = __importStar(__nccwpck_require__(9896));
 const os = __importStar(__nccwpck_require__(857));
 const path = __importStar(__nccwpck_require__(6928));
-const crypto_1 = __nccwpck_require__(6982);
 const codeScan_1 = __nccwpck_require__(333);
 /**
  * Generate a temporary YAML config file from action inputs
@@ -75475,13 +75475,39 @@ const github = __importStar(__nccwpck_require__(2146));
 const rest_1 = __nccwpck_require__(6357);
 const diffLineRanges_1 = __nccwpck_require__(1962);
 /**
- * Get GitHub context from the current workflow
+ * Get GitHub context from the current workflow.
+ * Supports both pull_request events and workflow_dispatch (with pr_number input).
+ * @param token GitHub token (required for workflow_dispatch to fetch PR details)
  * @returns GitHub PR context
  */
-function getGitHubContext() {
+async function getGitHubContext(token) {
     const context = github.context;
+    // For workflow_dispatch, read pr_number from event inputs
+    if (context.eventName === 'workflow_dispatch') {
+        const prNumberInput = context.payload.inputs?.pr_number;
+        if (!prNumberInput) {
+            throw new Error('workflow_dispatch requires a pr_number input. Add inputs: { pr_number: { required: true } } to your workflow.');
+        }
+        const prNumber = parseInt(prNumberInput, 10);
+        if (isNaN(prNumber)) {
+            throw new Error(`Invalid pr_number input: "${prNumberInput}"`);
+        }
+        const octokit = new rest_1.Octokit({ auth: token });
+        const { data: pr } = await octokit.pulls.get({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            pull_number: prNumber,
+        });
+        return {
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            number: pr.number,
+            sha: pr.head.sha,
+        };
+    }
+    // Otherwise, get context from pull_request event
     if (!context.payload.pull_request) {
-        throw new Error('This action can only be run on pull_request events');
+        throw new Error('This action requires a pull_request event or workflow_dispatch with pr_number input');
     }
     return {
         owner: context.repo.owner,
@@ -75740,14 +75766,14 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", ({ value: true }));
+const fs = __importStar(__nccwpck_require__(9896));
 const core = __importStar(__nccwpck_require__(6618));
 const exec = __importStar(__nccwpck_require__(3274));
 const github = __importStar(__nccwpck_require__(2146));
-const fs = __importStar(__nccwpck_require__(9896));
-const config_1 = __nccwpck_require__(319);
-const github_1 = __nccwpck_require__(1454);
-const github_2 = __nccwpck_require__(9382);
+const github_1 = __nccwpck_require__(9382);
 const codeScan_1 = __nccwpck_require__(333);
+const config_1 = __nccwpck_require__(319);
+const github_2 = __nccwpck_require__(1454);
 async function run() {
     try {
         // Get action inputs
@@ -75777,11 +75803,11 @@ async function run() {
         }
         core.info('🔍 Starting Promptfoo Code Scan...');
         // Validate we're in a PR context
-        const context = (0, github_1.getGitHubContext)();
+        const context = await (0, github_2.getGitHubContext)(githubToken);
         core.info(`📋 Scanning PR #${context.number} in ${context.owner}/${context.repo}`);
         // Check if this is a setup PR (workflow file addition) - detect early to skip CLI installation
         core.info('🔎 Checking if this is a setup PR...');
-        const files = await (0, github_1.getPRFiles)(githubToken, context);
+        const files = await (0, github_2.getPRFiles)(githubToken, context);
         // Detect if this is a setup PR (single file adding the workflow)
         const SETUP_WORKFLOW_PATH = '.github/workflows/promptfoo-code-scan.yml';
         const isSetupPR = files.length === 1 &&
@@ -75800,8 +75826,10 @@ async function run() {
             process.env.GITHUB_OIDC_TOKEN = oidcToken;
         }
         catch (error) {
-            core.warning(`Failed to get OIDC token: ${error instanceof Error ? error.message : String(error)}`);
-            core.warning('Comment posting to PRs will not work without OIDC token');
+            // OIDC tokens are not available for fork PRs (GitHub security restriction)
+            // For fork PRs, the server will use PR-based authentication instead
+            core.info(`OIDC token not available: ${error instanceof Error ? error.message : String(error)}`);
+            core.info('For fork PRs, this is expected. Authentication will use PR context instead.');
         }
         // Generate config file if not provided
         let finalConfigPath = configPath;
@@ -75830,6 +75858,8 @@ async function run() {
             ...(apiHost ? ['--api-host', apiHost] : []),
             '--config',
             finalConfigPath,
+            '--base',
+            baseBranch, // Use actual PR base branch (supports stacked PRs)
             '--compare',
             'HEAD', // Use HEAD to handle detached HEAD state in GitHub Actions
             '--json', // JSON output for parsing
@@ -75910,7 +75940,7 @@ async function run() {
             try {
                 const octokit = github.getOctokit(githubToken);
                 // Prepare comments and review body for posting
-                const { lineComments, generalComments, reviewBody } = (0, github_2.prepareComments)(comments, review, minimumSeverity);
+                const { lineComments, generalComments, reviewBody } = (0, github_1.prepareComments)(comments, review, minimumSeverity);
                 // Post review with line-specific comments
                 if (lineComments.length > 0 || reviewBody) {
                     core.info(`📌 Posting PR review${lineComments.length > 0 ? ` with ${lineComments.length} line-specific comments` : ''}...`);
