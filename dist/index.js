@@ -75917,8 +75917,9 @@ async function run() {
         }
         else {
             // Run real scan in production
-            core.info('📦 Installing promptfoo...');
-            await exec.exec('npm', ['install', '-g', 'promptfoo']);
+            const promptfooSource = core.getInput('promptfoo-source') || 'promptfoo';
+            core.info(`📦 Installing promptfoo from ${promptfooSource}...`);
+            await exec.exec('npm', ['install', '-g', promptfooSource]);
             core.info('✅ Promptfoo installed successfully');
             core.info(`🚀 Running promptfoo code-scans run...`);
             // Run promptfoo CLI and capture output
