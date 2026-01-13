@@ -76457,6 +76457,7 @@ function prepareComments(comments, review, minimumSeverity) {
     if (minimumSeverity && reviewBody) {
         const severityFormatted = (0, codeScan_1.formatSeverity)(minimumSeverity, 'plain');
         reviewBody += `\n\n<sub>Minimum severity threshold for this scan: ${severityFormatted} | [Learn more](https://www.promptfoo.dev/docs/code-scanning/)</sub>`;
+        reviewBody += `\n<sub>To re-scan after making changes, comment \`@promptfoo-scanner\` on this PR.</sub>`;
     }
     return {
         lineComments,
