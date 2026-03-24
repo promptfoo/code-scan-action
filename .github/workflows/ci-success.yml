@@ -1,0 +1,22 @@
+name: CI Success
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  ci-success:
+    name: CI Success
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      checks: read
+      statuses: read
+    steps:
+      - name: Wait for all PR checks
+        uses: promptfoo/.github/.github/actions/ci-success@main
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          timeout-seconds: 300

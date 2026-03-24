@@ -1,0 +1,57 @@
+name: Validate Action
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: Validate Action
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+
+      - name: Validate action metadata
+        run: |
+          node <<'NODE'
+          const fs = require('node:fs');
+
+          const actionYaml = fs.readFileSync('action.yml', 'utf8');
+          const requiredPatterns = [
+            { pattern: /^name:\s*['"]Promptfoo Code Scan['"]$/m, message: 'Missing expected action name' },
+            { pattern: /^description:\s*['"]Scan pull requests for LLM security vulnerabilities['"]$/m, message: 'Missing expected action description' },
+            { pattern: /^runs:\s*$/m, message: 'Missing runs section' },
+            { pattern: /^\s+using:\s*['"]node20['"]$/m, message: 'Missing expected runtime' },
+            { pattern: /^\s+main:\s*['"]dist\/index\.js['"]$/m, message: 'Missing expected action entrypoint' },
+          ];
+
+          for (const { pattern, message } of requiredPatterns) {
+            if (!pattern.test(actionYaml)) {
+              throw new Error(message);
+            }
+          }
+          NODE
+
+      - name: Ensure bundled files exist
+        run: |
+          test -f dist/index.js
+          test -f dist/sourcemap-register.js
+          test -f dist/licenses.txt
+          test -f cli-bundle/index.js
+          test -f cli-bundle/sourcemap-register.js
+
+      - name: Syntax check bundled JavaScript
+        run: |
+          node --check dist/index.js
+          node --check dist/sourcemap-register.js
+          node --check cli-bundle/index.js
+          node --check cli-bundle/sourcemap-register.js
