@@ -1,0 +1,59 @@
+name: Move release tags
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - .release-source.json
+
+permissions:
+  contents: write
+
+jobs:
+  move-release-tags:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Skip non-release commits
+        id: release-metadata
+        run: |
+          set -euo pipefail
+
+          if [[ ! -f .release-source.json ]]; then
+            echo "release_commit=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          version="$(jq -r '.version' .release-source.json)"
+          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Invalid release version in .release-source.json: $version"
+            exit 1
+          fi
+
+          echo "release_commit=true" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "major=${version%%.*}" >> "$GITHUB_OUTPUT"
+          echo "minor=${version%.*}" >> "$GITHUB_OUTPUT"
+
+      - name: Update floating and exact version tags
+        if: ${{ steps.release-metadata.outputs.release_commit == 'true' }}
+        env:
+          VERSION: ${{ steps.release-metadata.outputs.version }}
+          MAJOR: ${{ steps.release-metadata.outputs.major }}
+          MINOR: ${{ steps.release-metadata.outputs.minor }}
+        run: |
+          set -euo pipefail
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          git tag -fa "v${VERSION}" -m "Release v${VERSION}"
+          git tag -fa "v${MINOR}" -m "Release v${MINOR}"
+          git tag -fa "v${MAJOR}" -m "Release v${MAJOR}"
+
+          git push --force origin "refs/tags/v${VERSION}" "refs/tags/v${MINOR}" "refs/tags/v${MAJOR}"

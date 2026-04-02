@@ -1,0 +1,109 @@
+name: Validate release PR
+
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  validate-release-pr:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Validate maintenance PR scope
+        if: ${{ !startsWith(github.head_ref, 'release/code-scan-action-v') }}
+        run: |
+          set -euo pipefail
+
+          while IFS= read -r file; do
+            [[ -z "$file" ]] && continue
+            if [[ ! "$file" =~ ^\.github/ ]]; then
+              echo "Maintenance PRs may only change .github/* files. Unexpected file: $file"
+              exit 1
+            fi
+          done < <(git diff --name-only origin/main...HEAD)
+
+          echo "Branch ${{ github.head_ref }} is not a generated release branch; artifact mirror files are unchanged."
+
+      - name: Validate generated release payload
+        if: ${{ startsWith(github.head_ref, 'release/code-scan-action-v') }}
+        env:
+          HEAD_REF: ${{ github.head_ref }}
+        run: |
+          set -euo pipefail
+
+          if [[ ! -f .release-source.json ]]; then
+            echo "Missing .release-source.json in generated release PR"
+            exit 1
+          fi
+
+          jq -e '
+            .repository == "promptfoo/promptfoo"
+            and .packagePath == "code-scan-action"
+            and (.sourceSha | test("^[0-9a-f]{40}$"))
+            and (.sourceTag | type == "string" and length > 0)
+            and (.version | test("^[0-9]+\\.[0-9]+\\.[0-9]+$"))
+          ' .release-source.json > /dev/null
+
+          version="$(jq -r '.version' .release-source.json)"
+          source_sha="$(jq -r '.sourceSha' .release-source.json)"
+          source_tag="$(jq -r '.sourceTag' .release-source.json)"
+
+          if [[ "$HEAD_REF" != "release/code-scan-action-v${version}" ]]; then
+            echo "Branch name $HEAD_REF does not match release version $version"
+            exit 1
+          fi
+
+          if [[ "$source_tag" != "code-scan-action-${version}" ]]; then
+            echo "Source tag $source_tag does not match release version $version"
+            exit 1
+          fi
+
+          while IFS= read -r file; do
+            [[ -z "$file" ]] && continue
+            if [[ ! "$file" =~ ^(action\.yml|README\.md|CHANGELOG\.md|\.release-source\.json|dist(/.*)?)$ ]]; then
+              echo "Unexpected generated release file: $file"
+              exit 1
+            fi
+          done < <(git diff --name-only origin/main...HEAD)
+
+          source_dir="$RUNNER_TEMP/promptfoo-source"
+          expected_dir="$RUNNER_TEMP/code-scan-action-expected"
+
+          rm -rf "$source_dir" "$expected_dir"
+          git clone https://github.com/promptfoo/promptfoo.git "$source_dir"
+
+          cd "$source_dir"
+          git checkout --detach "$source_sha"
+          git merge-base --is-ancestor "$source_sha" origin/main
+
+          resolved_source_tag_sha="$(git rev-parse "${source_tag}^{commit}")"
+          if [[ "$resolved_source_tag_sha" != "$source_sha" ]]; then
+            echo "Source tag $source_tag points to $resolved_source_tag_sha, expected $source_sha"
+            exit 1
+          fi
+
+          npm install -g npm@latest
+          npm ci
+          npm ci --prefix code-scan-action
+          npm run tsc --prefix code-scan-action
+          npm run build --prefix code-scan-action
+
+          mkdir -p "$expected_dir"
+          cp code-scan-action/action.yml "$expected_dir/action.yml"
+          cp code-scan-action/README.md "$expected_dir/README.md"
+          cp code-scan-action/CHANGELOG.md "$expected_dir/CHANGELOG.md"
+          cp -R code-scan-action/dist "$expected_dir/dist"
+          cp "$GITHUB_WORKSPACE/.release-source.json" "$expected_dir/.release-source.json"
+
+          if ! diff -qr --exclude='.git' --exclude='.github' "$expected_dir" "$GITHUB_WORKSPACE"; then
+            echo "Generated mirror contents do not match promptfoo/promptfoo@$source_sha"
+            exit 1
+          fi
