@@ -103,7 +103,14 @@ jobs:
           cp -R code-scan-action/dist "$expected_dir/dist"
           cp "$GITHUB_WORKSPACE/.release-source.json" "$expected_dir/.release-source.json"
 
-          if ! diff -qr --exclude='.git' --exclude='.github' "$expected_dir" "$GITHUB_WORKSPACE"; then
-            echo "Generated mirror contents do not match promptfoo/promptfoo@$source_sha"
+          for file in action.yml README.md CHANGELOG.md .release-source.json; do
+            if ! diff -u "$expected_dir/$file" "$GITHUB_WORKSPACE/$file"; then
+              echo "Generated mirror file $file does not match promptfoo/promptfoo@$source_sha"
+              exit 1
+            fi
+          done
+
+          if ! diff -qr "$expected_dir/dist" "$GITHUB_WORKSPACE/dist"; then
+            echo "Generated mirror dist/ does not match promptfoo/promptfoo@$source_sha"
             exit 1
           fi
