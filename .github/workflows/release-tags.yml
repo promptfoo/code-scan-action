@@ -77,6 +77,13 @@ jobs:
           git tag -fa "v${MINOR}" -m "Release v${MINOR}"
           git tag -fa "v${MAJOR}" -m "Release v${MAJOR}"
 
+          git fetch origin main
+          current_main_sha="$(git rev-parse origin/main)"
+          if [[ "$GITHUB_SHA" != "$current_main_sha" ]]; then
+            echo "Skipping stale tag update for $GITHUB_SHA; origin/main is $current_main_sha"
+            exit 0
+          fi
+
           git push --force origin "refs/tags/v${VERSION}" "refs/tags/v${MINOR}" "refs/tags/v${MAJOR}"
 
       - name: Create or update GitHub release
@@ -103,6 +110,13 @@ jobs:
 
           if [[ ! -s "$notes_file" ]]; then
             printf 'Release v%s\n' "$VERSION" > "$notes_file"
+          fi
+
+          git fetch origin main
+          current_main_sha="$(git rev-parse origin/main)"
+          if [[ "$GITHUB_SHA" != "$current_main_sha" ]]; then
+            echo "Skipping stale release update for $GITHUB_SHA; origin/main is $current_main_sha"
+            exit 0
           fi
 
           if gh release view "v${VERSION}" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
