@@ -1,0 +1,124 @@
+name: Move release tags
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - .release-source.json
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-tags-main
+  cancel-in-progress: false
+
+jobs:
+  move-release-tags:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Skip non-release commits
+        id: release-metadata
+        run: |
+          set -euo pipefail
+
+          if [[ ! -f .release-source.json ]]; then
+            echo "release_commit=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          version="$(jq -r '.version' .release-source.json)"
+          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Invalid release version in .release-source.json: $version"
+            exit 1
+          fi
+
+          echo "release_commit=true" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "source_sha=$(jq -r '.sourceSha' .release-source.json)" >> "$GITHUB_OUTPUT"
+          echo "major=${version%%.*}" >> "$GITHUB_OUTPUT"
+          echo "minor=${version%.*}" >> "$GITHUB_OUTPUT"
+
+      - name: Update floating and exact version tags
+        if: ${{ steps.release-metadata.outputs.release_commit == 'true' }}
+        env:
+          VERSION: ${{ steps.release-metadata.outputs.version }}
+          SOURCE_SHA: ${{ steps.release-metadata.outputs.source_sha }}
+          MAJOR: ${{ steps.release-metadata.outputs.major }}
+          MINOR: ${{ steps.release-metadata.outputs.minor }}
+        run: |
+          set -euo pipefail
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          git tag -fa "v${VERSION}" -m "Release v${VERSION}"
+          git tag -fa "v${MINOR}" -m "Release v${MINOR}"
+          git tag -fa "v${MAJOR}" -m "Release v${MAJOR}"
+
+          git fetch origin main
+          main_version="$(git show origin/main:.release-source.json | jq -r '.version')"
+          main_source_sha="$(git show origin/main:.release-source.json | jq -r '.sourceSha')"
+          if [[ "$VERSION" != "$main_version" || "$SOURCE_SHA" != "$main_source_sha" ]]; then
+            echo "Skipping stale tag update for release $VERSION; origin/main now points to $main_version from $main_source_sha"
+            exit 0
+          fi
+
+          git push --force origin "refs/tags/v${VERSION}" "refs/tags/v${MINOR}" "refs/tags/v${MAJOR}"
+
+      - name: Create or update GitHub release
+        if: ${{ steps.release-metadata.outputs.release_commit == 'true' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.release-metadata.outputs.version }}
+          SOURCE_SHA: ${{ steps.release-metadata.outputs.source_sha }}
+        run: |
+          set -euo pipefail
+
+          notes_file="$RUNNER_TEMP/release-notes.md"
+          awk -v version="$VERSION" '
+            $0 ~ "^## \\[" version "\\]" {
+              in_section=1
+              next
+            }
+            in_section && /^## \[/ {
+              exit
+            }
+            in_section {
+              print
+            }
+          ' CHANGELOG.md > "$notes_file"
+
+          if [[ ! -s "$notes_file" ]]; then
+            printf 'Release v%s\n' "$VERSION" > "$notes_file"
+          fi
+
+          git fetch origin main
+          main_version="$(git show origin/main:.release-source.json | jq -r '.version')"
+          main_source_sha="$(git show origin/main:.release-source.json | jq -r '.sourceSha')"
+          if [[ "$VERSION" != "$main_version" || "$SOURCE_SHA" != "$main_source_sha" ]]; then
+            echo "Skipping stale release update for release $VERSION; origin/main now points to $main_version from $main_source_sha"
+            exit 0
+          fi
+
+          if gh release view "v${VERSION}" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            gh release edit "v${VERSION}" \
+              --repo "$GITHUB_REPOSITORY" \
+              --title "v${VERSION}" \
+              --notes-file "$notes_file" \
+              --target "$GITHUB_SHA" \
+              --verify-tag
+          else
+            gh release create "v${VERSION}" \
+              --repo "$GITHUB_REPOSITORY" \
+              --title "v${VERSION}" \
+              --notes-file "$notes_file" \
+              --target "$GITHUB_SHA" \
+              --verify-tag
+          fi
