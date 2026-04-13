@@ -23,25 +23,8 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Skip stale workflow executions
-        id: freshness
-        run: |
-          set -euo pipefail
-
-          git fetch origin main
-          current_main_sha="$(git rev-parse origin/main)"
-
-          if [[ "$GITHUB_SHA" != "$current_main_sha" ]]; then
-            echo "release_commit=false" >> "$GITHUB_OUTPUT"
-            echo "Skipping stale run for $GITHUB_SHA; origin/main is $current_main_sha"
-            exit 0
-          fi
-
-          echo "release_commit=true" >> "$GITHUB_OUTPUT"
-
       - name: Skip non-release commits
         id: release-metadata
-        if: ${{ steps.freshness.outputs.release_commit == 'true' }}
         run: |
           set -euo pipefail
 
@@ -58,6 +41,7 @@ jobs:
 
           echo "release_commit=true" >> "$GITHUB_OUTPUT"
           echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "source_sha=$(jq -r '.sourceSha' .release-source.json)" >> "$GITHUB_OUTPUT"
           echo "major=${version%%.*}" >> "$GITHUB_OUTPUT"
           echo "minor=${version%.*}" >> "$GITHUB_OUTPUT"
 
@@ -65,6 +49,7 @@ jobs:
         if: ${{ steps.release-metadata.outputs.release_commit == 'true' }}
         env:
           VERSION: ${{ steps.release-metadata.outputs.version }}
+          SOURCE_SHA: ${{ steps.release-metadata.outputs.source_sha }}
           MAJOR: ${{ steps.release-metadata.outputs.major }}
           MINOR: ${{ steps.release-metadata.outputs.minor }}
         run: |
@@ -78,9 +63,10 @@ jobs:
           git tag -fa "v${MAJOR}" -m "Release v${MAJOR}"
 
           git fetch origin main
-          current_main_sha="$(git rev-parse origin/main)"
-          if [[ "$GITHUB_SHA" != "$current_main_sha" ]]; then
-            echo "Skipping stale tag update for $GITHUB_SHA; origin/main is $current_main_sha"
+          main_version="$(git show origin/main:.release-source.json | jq -r '.version')"
+          main_source_sha="$(git show origin/main:.release-source.json | jq -r '.sourceSha')"
+          if [[ "$VERSION" != "$main_version" || "$SOURCE_SHA" != "$main_source_sha" ]]; then
+            echo "Skipping stale tag update for release $VERSION; origin/main now points to $main_version from $main_source_sha"
             exit 0
           fi
 
@@ -91,6 +77,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ steps.release-metadata.outputs.version }}
+          SOURCE_SHA: ${{ steps.release-metadata.outputs.source_sha }}
         run: |
           set -euo pipefail
 
@@ -113,9 +100,10 @@ jobs:
           fi
 
           git fetch origin main
-          current_main_sha="$(git rev-parse origin/main)"
-          if [[ "$GITHUB_SHA" != "$current_main_sha" ]]; then
-            echo "Skipping stale release update for $GITHUB_SHA; origin/main is $current_main_sha"
+          main_version="$(git show origin/main:.release-source.json | jq -r '.version')"
+          main_source_sha="$(git show origin/main:.release-source.json | jq -r '.sourceSha')"
+          if [[ "$VERSION" != "$main_version" || "$SOURCE_SHA" != "$main_source_sha" ]]; then
+            echo "Skipping stale release update for release $VERSION; origin/main now points to $main_version from $main_source_sha"
             exit 0
           fi
 
