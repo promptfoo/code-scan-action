@@ -32,6 +32,14 @@ jobs:
 
           echo "Branch ${{ github.head_ref }} is not a generated release branch; artifact mirror files are unchanged."
 
+      # setup-node gives `npm install -g` a writable global prefix and pins the
+      # rebuild toolchain to match promptfoo's release job (.nvmrc -> Node 24).
+      - name: Set up Node.js
+        if: ${{ startsWith(github.head_ref, 'release/code-scan-action-v') }}
+        uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+
       - name: Validate generated release payload
         if: ${{ startsWith(github.head_ref, 'release/code-scan-action-v') }}
         env:
@@ -90,7 +98,7 @@ jobs:
             exit 1
           fi
 
-          npm install -g npm@latest
+          npm install -g npm@11.11.0
           npm ci
           npm ci --prefix code-scan-action
           npm run tsc --prefix code-scan-action
