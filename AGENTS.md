@@ -4,7 +4,7 @@ Guidance for AI agents and developers working on `promptfoo/code-scan-action`.
 
 ## Repository Purpose
 
-This is a release-only mirror for the Promptfoo Code Scan GitHub Action. The action metadata lives in `action.yml`, and the published runtime bundle is checked in under `dist/` and `cli-bundle/`.
+This is a release-only mirror for the Promptfoo Code Scan GitHub Action. The action metadata lives in `action.yml`, and the published runtime bundle is checked in under `dist/`.
 
 Do not make normal feature or implementation changes directly in this repository. Source changes should happen in the main Promptfoo repository under `promptfoo/code-scan-action`, then be released into this repo through the project's release process.
 
@@ -13,7 +13,7 @@ Do not make normal feature or implementation changes directly in this repository
 - Documentation updates in `README.md`, `AGENTS.md`, or `CLAUDE.md`.
 - Metadata-only fixes in `action.yml` when they are clearly release/repo maintenance changes.
 
-Avoid editing generated bundles in `dist/` or `cli-bundle/` unless you are intentionally performing a release sync from the upstream source tree.
+Avoid editing generated bundles in `dist/` unless you are intentionally performing a release sync from the upstream source tree.
 
 ## Validation
 
