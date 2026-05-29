@@ -46387,7 +46387,9 @@ var ScanResponseSchema = external_exports.object({
   commentsPosted: external_exports.boolean().optional(),
   // True if server posted comments, false if action should post them
   batchCount: external_exports.number().optional(),
-  error: external_exports.string().optional()
+  error: external_exports.string().optional(),
+  skipReason: external_exports.string().optional()
+  // Set when the scan was intentionally skipped (e.g. fork PR awaiting maintainer approval)
 });
 
 // ../src/codeScan/util/github.ts
@@ -46689,13 +46691,25 @@ async function getPRFiles(token, context3) {
 }
 
 // src/main.ts
+var FORK_PR_AUTH_SKIP_REASON = "Fork PR scanning requires maintainer approval. See PR comment for options.";
 function formatError2(error52) {
   return error52 instanceof Error ? error52.message : String(error52);
+}
+var DEFAULT_MINIMUM_SEVERITY = "medium";
+function resolveMinimumSeverityInput() {
+  const primary = getInput("min-severity").trim();
+  const alias = getInput("minimum-severity").trim();
+  if (primary && alias && primary !== alias) {
+    warning(
+      `Both min-severity (${primary}) and minimum-severity (${alias}) are set; using min-severity. minimum-severity is an alias and should only be set when min-severity is unset.`
+    );
+  }
+  return primary || alias || DEFAULT_MINIMUM_SEVERITY;
 }
 function getActionInputs() {
   return {
     apiHost: getInput("api-host"),
-    minimumSeverity: getInput("min-severity") || getInput("minimum-severity"),
+    minimumSeverity: resolveMinimumSeverityInput(),
     configPath: getInput("config-path"),
     guidanceText: getInput("guidance"),
     guidanceFile: getInput("guidance-file"),
@@ -46901,9 +46915,13 @@ async function runPromptfooScan(cliArgs, oidcToken) {
     info("\u2705 Scan completed successfully");
     return parseScanOutput(scanOutput);
   }
-  if (scanOutput.includes("Fork PR scanning not authorized")) {
-    info("\u{1F500} Fork PR detected - see PR comment for scan options");
-    return void 0;
+  if (`${scanOutput}
+${scanError}`.includes("Fork PR scanning not authorized")) {
+    return {
+      success: true,
+      comments: [],
+      skipReason: FORK_PR_AUTH_SKIP_REASON
+    };
   }
   error(`CLI exited with code ${exitCode}`);
   error(`Error output: ${scanError}`);
@@ -47092,7 +47110,11 @@ function emitConfiguredSarifOutput(scanResponse, inputs) {
   }
 }
 async function handleScanResponse(scanResponse, inputs, context3) {
-  const { comments, commentsPosted, review } = scanResponse;
+  const { comments, commentsPosted, review, skipReason } = scanResponse;
+  if (skipReason) {
+    info(`\u{1F500} Scan skipped: ${skipReason}`);
+    return;
+  }
   info(`\u{1F4CA} Found ${comments.length} comments${review ? " and review summary" : ""}`);
   emitConfiguredSarifOutput(scanResponse, inputs);
   if ((comments.length > 0 || review) && commentsPosted === false) {
@@ -47158,9 +47180,6 @@ async function runCodeScan() {
     await fetchBaseBranch(baseBranch);
     const cliArgs = buildCliArgs(inputs.apiHost, finalConfigPath, baseBranch, context3);
     const scanResponse = await getScanResponse(cliArgs, oidcToken);
-    if (!scanResponse) {
-      return;
-    }
     await handleScanResponse(scanResponse, inputs, context3);
     logActCommentPreview(scanResponse.comments);
   } finally {
