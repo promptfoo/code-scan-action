@@ -12,7 +12,11 @@ var __require = /* @__PURE__ */ ((x) => typeof require !== "undefined" ? require
   throw Error('Dynamic require of "' + x + '" is not supported');
 });
 var __commonJS = (cb, mod) => function __require2() {
-  return mod || (0, cb[__getOwnPropNames(cb)[0]])((mod = { exports: {} }).exports, mod), mod.exports;
+  try {
+    return mod || (0, cb[__getOwnPropNames(cb)[0]])((mod = { exports: {} }).exports, mod), mod.exports;
+  } catch (e) {
+    throw mod = 0, e;
+  }
 };
 var __export = (target, all) => {
   for (var name in all)
@@ -46394,16 +46398,24 @@ var ScanResponseSchema = external_exports.object({
 
 // ../src/codeScan/util/github.ts
 var ALL_CLEAR_MESSAGE = "\u{1F44D} All Clear";
+function isPrPostableFinding(comment) {
+  return Boolean(comment.finding) && comment.severity !== CodeScanSeverity.NONE;
+}
+function hasPrPostableFindings(comments) {
+  return comments.some(isPrPostableFinding);
+}
+function hasInlineCommentLocation(comment) {
+  return Boolean(comment.file) && comment.line != null && Number.isInteger(comment.line) && comment.line > 0;
+}
 function prepareComments(comments, review, minimumSeverity) {
   const sortedComments = [...comments].sort((a, b) => {
     const rankA = a.severity ? getSeverityRank(a.severity) : 0;
     const rankB = b.severity ? getSeverityRank(b.severity) : 0;
     return rankB - rankA;
   });
-  const lineComments = sortedComments.filter((c) => c.file && c.finding);
-  const generalComments = sortedComments.filter(
-    (c) => !c.file && c.finding && c.severity !== CodeScanSeverity.NONE
-  );
+  const postableComments = sortedComments.filter(isPrPostableFinding);
+  const lineComments = postableComments.filter(hasInlineCommentLocation);
+  const generalComments = postableComments.filter((comment) => !hasInlineCommentLocation(comment));
   const hasOnlyNoneSeverity = comments.length > 0 && comments.every((c) => c.severity === CodeScanSeverity.NONE);
   let reviewBody = review || "";
   if (hasOnlyNoneSeverity && reviewBody) {
@@ -46458,7 +46470,7 @@ var SARIF_RULE = {
   // deterministic AST matches, which affects ranking and dedup behavior.
   properties: { tags: ["security", "llm-security"], precision: "medium" }
 };
-function isReportableFinding(comment) {
+function isSarifReportableFinding(comment) {
   const hasFile = comment.file != null && comment.file !== "";
   return hasFile && comment.severity !== CodeScanSeverity.NONE;
 }
@@ -46533,8 +46545,11 @@ function toSarifResult(comment) {
     }
   };
 }
+function hasSarifReportableFindings(response) {
+  return response.comments.some(isSarifReportableFinding);
+}
 function scanResponseToSarif(response) {
-  const results = response.comments.filter(isReportableFinding).map(toSarifResult);
+  const results = response.comments.filter(isSarifReportableFinding).map(toSarifResult);
   const driver = {
     name: "Promptfoo Code Scan",
     informationUri: TOOL_INFORMATION_URI,
@@ -46638,6 +46653,160 @@ var Octokit2 = Octokit.plugin(requestLog, legacyRestEndpointMethods, paginateRes
   }
 );
 
+// ../src/codeScan/util/diffHunkParser.ts
+var HUNK_HEADER_REGEX = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/;
+function parseHunkHeader(line) {
+  const match = line.match(HUNK_HEADER_REGEX);
+  if (!match) {
+    return null;
+  }
+  return {
+    oldStart: parseInt(match[1], 10),
+    oldCount: match[2] ? parseInt(match[2], 10) : 1,
+    newStart: parseInt(match[3], 10),
+    newCount: match[4] ? parseInt(match[4], 10) : 1
+  };
+}
+
+// ../src/codeScan/util/diffLineRanges.ts
+function extractValidLineRanges(unifiedDiff) {
+  const ranges = /* @__PURE__ */ new Map();
+  if (!unifiedDiff || unifiedDiff.trim() === "") {
+    return ranges;
+  }
+  const lines = unifiedDiff.split("\n");
+  let currentFile = null;
+  let currentRanges = [];
+  let currentNewLine = 0;
+  let hunkStartLine = 0;
+  for (const line of lines) {
+    const fileMatch = line.match(/^\+\+\+ b\/(.+)$/);
+    if (fileMatch) {
+      if (currentFile && hunkStartLine > 0 && currentNewLine > hunkStartLine) {
+        currentRanges.push({
+          start: hunkStartLine,
+          end: currentNewLine - 1
+        });
+      }
+      if (currentFile && currentRanges.length > 0) {
+        ranges.set(currentFile, currentRanges);
+      }
+      currentFile = fileMatch[1];
+      currentRanges = [];
+      currentNewLine = 0;
+      hunkStartLine = 0;
+      continue;
+    }
+    const hunkHeader = parseHunkHeader(line);
+    if (hunkHeader && currentFile) {
+      if (hunkStartLine > 0 && currentNewLine > hunkStartLine) {
+        currentRanges.push({
+          start: hunkStartLine,
+          end: currentNewLine - 1
+        });
+      }
+      hunkStartLine = hunkHeader.newStart;
+      currentNewLine = hunkHeader.newStart;
+      if (hunkHeader.newCount === 0) {
+        hunkStartLine = 0;
+      }
+      continue;
+    }
+    if (currentFile && hunkStartLine > 0) {
+      if (line.startsWith("-")) {
+        continue;
+      } else if (line.startsWith("+") || line.startsWith(" ") || line === "") {
+        currentNewLine++;
+      } else if (line.startsWith("\\")) {
+        continue;
+      }
+    }
+  }
+  if (currentFile) {
+    if (hunkStartLine > 0 && currentNewLine > hunkStartLine) {
+      currentRanges.push({
+        start: hunkStartLine,
+        end: currentNewLine - 1
+      });
+    }
+    if (currentRanges.length > 0) {
+      ranges.set(currentFile, currentRanges);
+    }
+  }
+  return ranges;
+}
+function isLineInDiff(filepath, line, ranges) {
+  const fileRanges = ranges.get(filepath);
+  if (!fileRanges) {
+    return false;
+  }
+  return fileRanges.some((range) => line >= range.start && line <= range.end);
+}
+function clampToValidLine(filepath, line, ranges) {
+  const fileRanges = ranges.get(filepath);
+  if (!fileRanges || fileRanges.length === 0) {
+    return null;
+  }
+  if (isLineInDiff(filepath, line, ranges)) {
+    return line;
+  }
+  const sortedRanges = [...fileRanges].sort((a, b) => a.start - b.start);
+  if (line < sortedRanges[0].start) {
+    return sortedRanges[0].start;
+  }
+  const lastRange = sortedRanges[sortedRanges.length - 1];
+  if (line > lastRange.end) {
+    return lastRange.end;
+  }
+  for (let i = 0; i < sortedRanges.length - 1; i++) {
+    const currentRange = sortedRanges[i];
+    const nextRange = sortedRanges[i + 1];
+    if (line > currentRange.end && line < nextRange.start) {
+      return currentRange.end;
+    }
+  }
+  return lastRange.end;
+}
+function clampCommentLines(filepath, startLine, endLine, ranges) {
+  const fileRanges = ranges.get(filepath);
+  if (!fileRanges || fileRanges.length === 0 || endLine == null) {
+    return null;
+  }
+  const clampedEndLine = clampToValidLine(filepath, endLine, ranges);
+  if (clampedEndLine === null) {
+    return null;
+  }
+  if (startLine == null) {
+    return {
+      startLine: null,
+      line: clampedEndLine
+    };
+  }
+  const clampedStartLine = clampToValidLine(filepath, startLine, ranges);
+  if (clampedStartLine === null) {
+    return {
+      startLine: null,
+      line: clampedEndLine
+    };
+  }
+  if (clampedStartLine > clampedEndLine) {
+    return {
+      startLine: null,
+      line: clampedEndLine
+    };
+  }
+  if (clampedStartLine === clampedEndLine) {
+    return {
+      startLine: null,
+      line: clampedEndLine
+    };
+  }
+  return {
+    startLine: clampedStartLine,
+    line: clampedEndLine
+  };
+}
+
 // src/github.ts
 async function getGitHubContext(token) {
   const context3 = context2;
@@ -46688,6 +46857,62 @@ async function getPRFiles(token, context3) {
     path: file2.filename,
     status: file2.status
   }));
+}
+async function getPRDiffRanges(octokit, context3) {
+  try {
+    const { data: diff } = await octokit.pulls.get({
+      owner: context3.owner,
+      repo: context3.repo,
+      pull_number: context3.number,
+      mediaType: { format: "diff" }
+    });
+    return extractValidLineRanges(diff);
+  } catch (error52) {
+    warning(
+      `Failed to fetch PR diff for line validation: ${error52 instanceof Error ? error52.message : String(error52)}`
+    );
+    return /* @__PURE__ */ new Map();
+  }
+}
+function clampCommentToValidRange(comment, validRanges) {
+  if (!comment.file || comment.line == null) {
+    return comment;
+  }
+  const clamped = clampCommentLines(comment.file, comment.startLine, comment.line, validRanges);
+  if (!clamped) {
+    return null;
+  }
+  return {
+    ...comment,
+    startLine: clamped.startLine,
+    line: clamped.line
+  };
+}
+async function partitionReviewCommentsWithOctokit(octokit, context3, comments) {
+  const validRanges = await getPRDiffRanges(octokit, context3);
+  const lineComments = [];
+  const generalComments = [];
+  const invalidLineComments = [];
+  for (const comment of comments) {
+    if (!comment.file || comment.line == null) {
+      generalComments.push(comment);
+      continue;
+    }
+    const clamped = clampCommentToValidRange(comment, validRanges);
+    if (clamped) {
+      lineComments.push(clamped);
+    } else {
+      warning(
+        `Comment on ${comment.file}:${comment.line} could not be placed in diff - converting to general comment`
+      );
+      invalidLineComments.push(comment);
+    }
+  }
+  return { lineComments, generalComments, invalidLineComments };
+}
+async function partitionReviewCommentsByDiff(token, context3, comments) {
+  const octokit = new Octokit2({ auth: token });
+  return partitionReviewCommentsWithOctokit(octokit, context3, comments);
 }
 
 // src/main.ts
@@ -46955,13 +47180,21 @@ ${comment.aiAgentPrompt}
   }
   return body;
 }
+function buildGeneralCommentBody(comment) {
+  const body = buildCommentBody(comment);
+  const location = comment.file && comment.line ? comment.startLine && comment.startLine !== comment.line ? `${comment.file}:${comment.startLine}-${comment.line}` : `${comment.file}:${comment.line}` : comment.file;
+  return location ? `**${location}**
+
+${body}` : body;
+}
 function toReviewComment(comment) {
+  const startLine = comment.startLine && comment.line && comment.startLine < comment.line ? comment.startLine : void 0;
   return {
     path: comment.file,
     line: comment.line || void 0,
-    start_line: comment.startLine || void 0,
+    start_line: startLine,
     side: "RIGHT",
-    start_side: comment.startLine ? "RIGHT" : void 0,
+    start_side: startLine ? "RIGHT" : void 0,
     body: buildCommentBody(comment)
   };
 }
@@ -46992,7 +47225,7 @@ async function postGeneralComments(octokit, context3, generalComments) {
       owner: context3.owner,
       repo: context3.repo,
       issue_number: context3.number,
-      body: buildCommentBody(comment)
+      body: buildGeneralCommentBody(comment)
     });
   }
   info("\u2705 General comments posted successfully");
@@ -47001,13 +47234,18 @@ async function postFallbackComments(githubToken, context3, comments, review, min
   info("\u{1F4DD} Server could not post comments - posting as fallback...");
   try {
     const octokit = getOctokit(githubToken);
-    const { lineComments, generalComments, reviewBody } = prepareComments(
-      comments,
-      review,
-      minimumSeverity
+    const {
+      lineComments: preparedLineComments,
+      generalComments,
+      reviewBody
+    } = prepareComments(comments, review, minimumSeverity);
+    const { lineComments, invalidLineComments } = await partitionReviewCommentsByDiff(
+      githubToken,
+      context3,
+      preparedLineComments
     );
     await postReview(octokit, context3, lineComments, reviewBody);
-    await postGeneralComments(octokit, context3, generalComments);
+    await postGeneralComments(octokit, context3, [...generalComments, ...invalidLineComments]);
     info("\u2705 All comments posted to PR by action");
   } catch (error52) {
     error(`Failed to post comments: ${formatError2(error52)}`);
@@ -47111,13 +47349,22 @@ function emitConfiguredSarifOutput(scanResponse, inputs) {
 }
 async function handleScanResponse(scanResponse, inputs, context3) {
   const { comments, commentsPosted, review, skipReason } = scanResponse;
-  if (skipReason) {
+  const hasSarifFindings = hasSarifReportableFindings(scanResponse);
+  const hasPrFindings = hasPrPostableFindings(comments);
+  if (skipReason && !hasSarifFindings && !hasPrFindings) {
     info(`\u{1F500} Scan skipped: ${skipReason}`);
     return;
   }
+  if (skipReason) {
+    warning(
+      `Scan response included findings alongside a skipReason ("${skipReason}"); processing findings.`
+    );
+  }
   info(`\u{1F4CA} Found ${comments.length} comments${review ? " and review summary" : ""}`);
-  emitConfiguredSarifOutput(scanResponse, inputs);
-  if ((comments.length > 0 || review) && commentsPosted === false) {
+  if (!skipReason || hasSarifFindings) {
+    emitConfiguredSarifOutput(scanResponse, inputs);
+  }
+  if ((hasPrFindings || review) && commentsPosted === false) {
     await postFallbackComments(
       inputs.githubToken,
       context3,
