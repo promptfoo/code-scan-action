@@ -1,7 +1,7 @@
 {
   "repository": "promptfoo/promptfoo",
-  "sourceSha": "af7ec0b5f1072685a919015faf5799cc0886d71e",
-  "sourceTag": "code-scan-action-0.1.8",
+  "sourceSha": "2c45764ca1daf4587c83d68b940ba0eb14cb7ac4",
+  "sourceTag": "code-scan-action-0.2.0",
   "packagePath": "code-scan-action",
-  "version": "0.1.8"
+  "version": "0.2.0"
 }
