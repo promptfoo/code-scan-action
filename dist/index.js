@@ -33071,7 +33071,7 @@ function getOctokit(token, options, ...additionalPlugins) {
 }
 
 // ../package.json
-var version = "0.124.0";
+var version = "0.124.1";
 
 // ../node_modules/zod/v4/classic/external.js
 var external_exports = {};
@@ -53794,8 +53794,9 @@ async function installPromptfooCli(promptfooVersion) {
   info("\u2705 Promptfoo installed successfully");
   return resolveInstalledPromptfooEntrypoint(installDir);
 }
-async function runPromptfooScan(cliArgs, oidcToken, promptfooVersion) {
+async function runPromptfooScan(cliArgs, promptfooVersion) {
   const promptfooEntrypoint = await installPromptfooCli(promptfooVersion);
+  const oidcToken = await authenticateWithOidc();
   info("\u{1F680} Running promptfoo code-scans run...");
   let scanOutput = "";
   let scanError = "";
@@ -53828,11 +53829,11 @@ ${scanError}`.includes("Fork PR scanning not authorized")) {
   error(`Error output: ${scanError}`);
   throw new Error(`Code scan failed with exit code ${exitCode}`);
 }
-function getScanResponse(cliArgs, oidcToken, promptfooVersion) {
+function getScanResponse(cliArgs, promptfooVersion) {
   if (process.env.ACT === "true") {
     return Promise.resolve(createMockScanResponse());
   }
-  return runPromptfooScan(cliArgs, oidcToken, promptfooVersion);
+  return runPromptfooScan(cliArgs, promptfooVersion);
 }
 function buildCommentBody(comment) {
   let body = formatSeverity(comment.severity) + comment.finding;
@@ -54096,13 +54097,12 @@ async function runCodeScan() {
     return;
   }
   info("\u2705 Not a setup PR - proceeding with security scan");
-  const oidcToken = await authenticateWithOidc();
   const finalConfigPath = resolveConfigPath(inputs.configPath, inputs.minimumSeverity, guidance);
   try {
     const baseBranch = await getBaseBranch(inputs.githubToken, context3);
     await fetchBaseBranch(baseBranch);
     const cliArgs = buildCliArgs(inputs.apiHost, finalConfigPath, baseBranch, context3);
-    const scanResponse = await getScanResponse(cliArgs, oidcToken, inputs.promptfooVersion);
+    const scanResponse = await getScanResponse(cliArgs, inputs.promptfooVersion);
     await handleScanResponse(scanResponse, inputs, context3);
     logActCommentPreview(scanResponse.comments);
   } finally {
