@@ -58,7 +58,18 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
-          git tag -fa "v${VERSION}" -m "Release v${VERSION}"
+          # Exact version tags are release artifacts consumers pin to: create them
+          # once and never move them. Re-pointing an existing exact tag would defeat
+          # the pin, so a same-version re-release fails loudly here instead — bump
+          # the version to release again. Only the floating major/minor aliases move.
+          existing_exact="$(git rev-parse -q --verify "refs/tags/v${VERSION}^{commit}" || true)"
+          if [[ -z "$existing_exact" ]]; then
+            git tag -a "v${VERSION}" -m "Release v${VERSION}"
+          elif [[ "$existing_exact" != "$GITHUB_SHA" ]]; then
+            echo "Tag v${VERSION} already exists at ${existing_exact}; refusing to move it to ${GITHUB_SHA}. Release a new version instead."
+            exit 1
+          fi
+
           git tag -fa "v${MINOR}" -m "Release v${MINOR}"
           git tag -fa "v${MAJOR}" -m "Release v${MAJOR}"
 
@@ -70,7 +81,10 @@ jobs:
             exit 0
           fi
 
-          git push --force origin "refs/tags/v${VERSION}" "refs/tags/v${MINOR}" "refs/tags/v${MAJOR}"
+          # No --force for the exact tag: if the remote already has it at a different
+          # commit, the push is rejected rather than silently re-pointing the release.
+          git push origin "refs/tags/v${VERSION}"
+          git push --force origin "refs/tags/v${MINOR}" "refs/tags/v${MAJOR}"
 
       - name: Create or update GitHub release
         if: ${{ steps.release-metadata.outputs.release_commit == 'true' }}
