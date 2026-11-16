@@ -32,15 +32,7 @@ jobs:
 
           echo "Branch ${{ github.head_ref }} is not a generated release branch; artifact mirror files are unchanged."
 
-      # setup-node gives `npm install -g` a writable global prefix and pins the
-      # rebuild toolchain to match promptfoo's release job (.nvmrc -> Node 24).
-      - name: Set up Node.js
-        if: ${{ startsWith(github.head_ref, 'release/code-scan-action-v') }}
-        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
-        with:
-          node-version: '24'
-
-      - name: Validate generated release payload
+      - name: Verify release source
         if: ${{ startsWith(github.head_ref, 'release/code-scan-action-v') }}
         env:
           HEAD_REF: ${{ github.head_ref }}
@@ -98,12 +90,25 @@ jobs:
             exit 1
           fi
 
+      - name: Set up Node.js
+        if: ${{ startsWith(github.head_ref, 'release/code-scan-action-v') }}
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version-file: ${{ runner.temp }}/promptfoo-source/.nvmrc
+
+      - name: Rebuild and compare release payload
+        if: ${{ startsWith(github.head_ref, 'release/code-scan-action-v') }}
+        working-directory: ${{ runner.temp }}/promptfoo-source
+        run: |
+          set -euo pipefail
+          source_sha="$(git rev-parse HEAD)"
           npm install -g npm@11.11.0
           npm ci
           npm ci --prefix code-scan-action
           npm run tsc --prefix code-scan-action
           npm run build --prefix code-scan-action
 
+          expected_dir="$RUNNER_TEMP/code-scan-action-expected"
           mkdir -p "$expected_dir"
           cp code-scan-action/action.yml "$expected_dir/action.yml"
           cp code-scan-action/README.md "$expected_dir/README.md"
