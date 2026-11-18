@@ -32,6 +32,10 @@ jobs:
 
           echo "Branch ${{ github.head_ref }} is not a generated release branch; artifact mirror files are unchanged."
 
+      - name: Test release note extraction
+        if: ${{ !startsWith(github.head_ref, 'release/code-scan-action-v') }}
+        run: python3 .github/tests/test_release_notes.py
+
       - name: Verify release source
         if: ${{ startsWith(github.head_ref, 'release/code-scan-action-v') }}
         env:
@@ -127,3 +131,11 @@ jobs:
             echo "Generated mirror dist/ does not match promptfoo/promptfoo@$source_sha"
             exit 1
           fi
+
+      - name: Preview the notes that will be published
+        if: ${{ startsWith(github.head_ref, 'release/code-scan-action-v') }}
+        run: |
+          set -euo pipefail
+          version="$(jq -er '.version' .release-source.json)"
+          echo "## Code Scan Action v${version}" >> "$GITHUB_STEP_SUMMARY"
+          python3 .github/scripts/release-notes.py "$version" CHANGELOG.md >> "$GITHUB_STEP_SUMMARY"

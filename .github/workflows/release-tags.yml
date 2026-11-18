@@ -7,8 +7,7 @@ on:
     paths:
       - .release-source.json
 
-permissions:
-  contents: write
+permissions: {}
 
 concurrency:
   group: release-tags-main
@@ -18,6 +17,11 @@ jobs:
   move-release-tags:
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    permissions:
+      contents: write
+    outputs:
+      version: ${{ steps.release-metadata.outputs.version }}
+      publication: ${{ steps.release.outputs.publication }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -44,6 +48,12 @@ jobs:
           echo "source_sha=$(jq -r '.sourceSha' .release-source.json)" >> "$GITHUB_OUTPUT"
           echo "major=${version%%.*}" >> "$GITHUB_OUTPUT"
           echo "minor=${version%.*}" >> "$GITHUB_OUTPUT"
+
+      - name: Read the versioned release notes before moving tags
+        if: ${{ steps.release-metadata.outputs.release_commit == 'true' }}
+        env:
+          VERSION: ${{ steps.release-metadata.outputs.version }}
+        run: python3 .github/scripts/release-notes.py "$VERSION" CHANGELOG.md > "$RUNNER_TEMP/release-notes.md"
 
       - name: Update floating and exact version tags
         if: ${{ steps.release-metadata.outputs.release_commit == 'true' }}
@@ -72,7 +82,8 @@ jobs:
 
           git push --force origin "refs/tags/v${VERSION}" "refs/tags/v${MINOR}" "refs/tags/v${MAJOR}"
 
-      - name: Create or update GitHub release
+      - name: Publish GitHub release
+        id: release
         if: ${{ steps.release-metadata.outputs.release_commit == 'true' }}
         env:
           GH_TOKEN: ${{ github.token }}
@@ -81,44 +92,47 @@ jobs:
         run: |
           set -euo pipefail
 
-          notes_file="$RUNNER_TEMP/release-notes.md"
-          awk -v version="$VERSION" '
-            $0 ~ "^## \\[" version "\\]" {
-              in_section=1
-              next
-            }
-            in_section && /^## \[/ {
-              exit
-            }
-            in_section {
-              print
-            }
-          ' CHANGELOG.md > "$notes_file"
-
-          if [[ ! -s "$notes_file" ]]; then
-            printf 'Release v%s\n' "$VERSION" > "$notes_file"
-          fi
-
           git fetch origin main
           main_version="$(git show origin/main:.release-source.json | jq -r '.version')"
           main_source_sha="$(git show origin/main:.release-source.json | jq -r '.sourceSha')"
           if [[ "$VERSION" != "$main_version" || "$SOURCE_SHA" != "$main_source_sha" ]]; then
+            echo "publication=skipped" >> "$GITHUB_OUTPUT"
             echo "Skipping stale release update for release $VERSION; origin/main now points to $main_version from $main_source_sha"
             exit 0
           fi
 
-          if gh release view "v${VERSION}" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
-            gh release edit "v${VERSION}" \
-              --repo "$GITHUB_REPOSITORY" \
-              --title "v${VERSION}" \
-              --notes-file "$notes_file" \
-              --target "$GITHUB_SHA" \
-              --verify-tag
+          # A replay may encounter a published release whose notes maintainers have edited.
+          if draft="$(gh release view "v${VERSION}" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft)"; then
+            if [[ "$draft" == "true" ]]; then
+              echo "::error::Release v${VERSION} already exists as a draft."
+              exit 1
+            fi
+            echo "Release v${VERSION} already exists."
           else
             gh release create "v${VERSION}" \
               --repo "$GITHUB_REPOSITORY" \
               --title "v${VERSION}" \
-              --notes-file "$notes_file" \
+              --notes-file "$RUNNER_TEMP/release-notes.md" \
               --target "$GITHUB_SHA" \
               --verify-tag
           fi
+          echo "publication=published" >> "$GITHUB_OUTPUT"
+
+  report-release:
+    needs: move-release-tags
+    if: ${{ !cancelled() && needs.move-release-tags.outputs.version != '' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Report publication on the merged mirror PR
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PUBLICATION_RESULT: ${{ needs.move-release-tags.outputs.publication || needs.move-release-tags.result }}
+        run: bash .github/scripts/report-release.sh
