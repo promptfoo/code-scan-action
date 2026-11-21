@@ -19,6 +19,8 @@ jobs:
 
       - name: Validate maintenance PR scope
         if: ${{ !startsWith(github.head_ref, 'release/code-scan-action-v') }}
+        env:
+          HEAD_REF: ${{ github.head_ref }}
         run: |
           set -euo pipefail
 
@@ -30,7 +32,7 @@ jobs:
             fi
           done < <(git diff --name-only origin/main...HEAD)
 
-          echo "Branch ${{ github.head_ref }} is not a generated release branch; artifact mirror files are unchanged."
+          echo "Branch $HEAD_REF is not a generated release branch; artifact mirror files are unchanged."
 
       - name: Test release note extraction
         if: ${{ !startsWith(github.head_ref, 'release/code-scan-action-v') }}
